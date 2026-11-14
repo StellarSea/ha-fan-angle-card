@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fan Angle Card Playground</title>
+<!--
+  Local playground with a mocked `hass` object. Serve this folder over HTTP
+  (e.g. `python -m http.server`) and open /test.html.
+  The mock device silently rejects writes that would make (high - low) < 20,
+  just like the Xiaomi P90 does.
+-->
+<style>
+  body { background:#111; color:#e1e1e1; font-family: system-ui, sans-serif; margin:0; padding:16px; }
+  :root { --primary-text-color:#e1e1e1; --secondary-text-color:#9b9b9b; --divider-color:rgba(255,255,255,.12); }
+  .wrap { max-width: 420px; margin: 0 auto; display:grid; gap:12px; }
+  .opts { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:13px; }
+  pre { font-size: 12px; background:#1c1c1c; padding:8px; border-radius:8px; white-space:pre-wrap; max-height: 200px; overflow:auto; }
+</style>
+<script>
+  // minimal stand-ins for HA frontend elements
+  customElements.define("ha-card", class extends HTMLElement {
+    connectedCallback(){ this.style.cssText="display:block;background:#1c1c1c;border-radius:16px"; }
+  });
+  customElements.define("ha-icon", class extends HTMLElement {
+    static get observedAttributes(){ return ["icon"]; }
+    attributeChangedCallback(){ this.textContent = ({"mdi:chevron-right":"›","mdi:arrow-left-right":"⇄","mdi:arrow-up-down":"⇅"})[this.getAttribute("icon")]||"•"; }
+  });
+</script>
+<script type="module" src="./fan-angle-card.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="opts" id="opts"></div>
+  <div id="host"></div>
+  <pre id="log"></pre>
+</div>
+<script type="module">
+  await customElements.whenDefined("fan-angle-card");
+  const P = "demo_fan";
+  const attrs = {
+    left:  { min:10, max:120, step:10, unit_of_measurement:"°" }, right: { min:0, max:110, step:10, unit_of_measurement:"°" },
+    up:    { min:10, max:100, step:10, unit_of_measurement:"°" }, down:  { min:0, max:90,  step:10, unit_of_measurement:"°" },
+  };
+  const dev = { left:120, right:0, up:90, down:20 };
+  const sw = { horizontal_swing:"on", vertical_swing:"on", symmetrical_swing_h:"off", symmetrical_swing_v:"off" };
+  window.__log = []; window.__dev = dev;
+  const log = (m) => { document.getElementById("log").textContent += m + "\n"; window.__log.push(m); };
+
+  const states = () => {
+    const s = {};
+    for (const k of ["left","right","up","down"]) s[`number.${P}_${k}_angle`] = { state: String(dev[k]), attributes: attrs[k] };
+    for (const k in sw) s[`switch.${P}_${k}`] = { state: sw[k], attributes: {} };
+    return s;
+  };
+  const hass = {
+    locale: { language: new URLSearchParams(location.search).get("lang") || "ko" },
+    states: states(),
+    async callService(domain, service, data) {
+      await new Promise(r => setTimeout(r, 120));
+      if (service === "set_value") {
+        const k = data.entity_id.replace(`number.${P}_`, "").replace("_angle", "");
+        const next = { ...dev, [k]: data.value };
+        if (next.left - next.right >= 20 && next.up - next.down >= 20) { dev[k] = data.value; log(`SET ${k}=${data.value} ✓`); }
+        else log(`SET ${k}=${data.value} ✗ rejected`);
+      } else if (service === "toggle" || service === "turn_on" || service === "turn_off") {
+        const k = data.entity_id.replace(`switch.${P}_`, "");
+        sw[k] = service === "turn_on" ? "on" : service === "turn_off" ? "off" : (sw[k] === "on" ? "off" : "on");
+        log(`SWITCH ${k}=${sw[k]}`);
+      }
+      push();
+    },
+  };
+
+  const base = {
+    title: "Demo fan",
+    horizontal: { swing:`switch.${P}_horizontal_swing`, symmetric:`switch.${P}_symmetrical_swing_h`, left:`number.${P}_left_angle`, right:`number.${P}_right_angle` },
+    vertical:   { swing:`switch.${P}_vertical_swing`,   symmetric:`switch.${P}_symmetrical_swing_v`, up:`number.${P}_up_angle`,   down:`number.${P}_down_angle` },
+  };
+  const flags = ["always_open","expanded","hide_degree","hide_ticks","hide_glow","disable_animations","disable_move","invert_h","hide_symmetric_h"];
+  const on = new Set();
+  const card = document.createElement("fan-angle-card");
+  window.__card = card;
+  function configure() {
+    const cfg = structuredClone(base);
+    for (const f of on) {
+      if (f === "invert_h") cfg.horizontal.invert = true;
+      else if (f === "hide_symmetric_h") cfg.horizontal.hide_symmetric = true;
+      else cfg[f] = true;
+    }
+    card.setConfig(cfg);
+    window.__cfg = cfg;
+  }
+  function push() { hass.states = states(); card.hass = { ...hass }; }
+  const opts = document.getElementById("opts");
+  for (const f of flags) {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="checkbox"> ${f}`;
+    l.querySelector("input").onchange = (e) => { e.target.checked ? on.add(f) : on.delete(f); configure(); };
+    opts.appendChild(l);
+  }
+  window.__setFlags = (fs) => { on.clear(); fs.forEach(f => on.add(f)); configure(); };
+  configure();
+  document.getElementById("host").appendChild(card);
+  push();
+</script>
+</body>
+</html>
